@@ -446,6 +446,17 @@ private fun InfoRow(
             icon = painterResource(R.drawable.materialsymbols_ic_device_thermostat_rounded_filled),
             value = "$temp"
         )
+        if (batteryInfo.powerW != 0f) {
+            Spacer(modifier = Modifier.width(4.dp))
+            // Battery power: "4.8W" while discharging, "+12.3W" while charging.
+            InfoItem(
+                icon = painterResource(R.drawable.materialsymbols_ic_bolt_rounded_filled),
+                value = String.format(
+                    if (batteryInfo.powerW > 0f) "+%.1fW" else "%.1fW",
+                    kotlin.math.abs(batteryInfo.powerW)
+                )
+            )
+        }
         Spacer(modifier = Modifier.weight(1f))
         Text(
             text = currentMode.displayName,
@@ -1297,10 +1308,11 @@ fun rememberBatteryInfo(): BatteryInfo {
                     
                     val tempTenths = it.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
                     val tempCelsius = tempTenths / 10f
-                    
-                    batteryInfo.value = BatteryInfo(
+
+                    batteryInfo.value = batteryInfo.value.copy(
                         level = percentage,
-                        temperatureC = tempCelsius
+                        temperatureC = tempCelsius,
+                        voltageMv = it.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
                     )
                 }
             }
@@ -1321,18 +1333,35 @@ fun rememberBatteryInfo(): BatteryInfo {
             val percentage = if (level >= 0 && scale > 0) (level * 100 / scale) else -1
             val tempTenths = intent.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0)
             val tempCelsius = tempTenths / 10f
-            
-            batteryInfo.value = BatteryInfo(
+
+            batteryInfo.value = batteryInfo.value.copy(
                 level = percentage,
-                temperatureC = tempCelsius
+                temperatureC = tempCelsius,
+                voltageMv = intent.getIntExtra(BatteryManager.EXTRA_VOLTAGE, 0)
             )
         }
-        
+
         onDispose {
             context.unregisterReceiver(receiver)
         }
     }
-    
+
+    // Power draw (XDA #204): ACTION_BATTERY_CHANGED carries no current, and the fuel gauge only
+    // updates it every few seconds anyway, so poll CURRENT_NOW while the panel is composed.
+    // Sign convention follows the kernel: negative = discharging.
+    LaunchedEffect(context) {
+        val bm = context.getSystemService(Context.BATTERY_SERVICE) as? BatteryManager
+            ?: return@LaunchedEffect
+        while (isActive) {
+            val currentUa = bm.getIntProperty(BatteryManager.BATTERY_PROPERTY_CURRENT_NOW)
+            val mv = batteryInfo.value.voltageMv
+            val watts = if (currentUa == Int.MIN_VALUE || mv <= 0) 0f
+                        else currentUa / 1_000_000f * mv / 1000f
+            batteryInfo.value = batteryInfo.value.copy(powerW = watts)
+            delay(2000)
+        }
+    }
+
     return batteryInfo.value
 }
 
@@ -1366,6 +1395,10 @@ data class AppInfo(
 
 data class BatteryInfo(
     val level: Int = -1,
-    val temperatureC: Float = 0f
+    val temperatureC: Float = 0f,
+    /** Battery terminal voltage in mV (ACTION_BATTERY_CHANGED). */
+    val voltageMv: Int = 0,
+    /** Instantaneous battery power in W: negative = discharging, positive = charging; 0 = unknown. */
+    val powerW: Float = 0f
 )
 

@@ -33,7 +33,15 @@ class DanmakuServiceListener : NotificationListenerService() {
 
     override fun onListenerConnected() {
         super.onListenerConnected()
-        getActiveNotifications()?.forEach { sbn ->
+        // NMS may have already unbound us by the time the connect message runs (listener
+        // access re-granted while a game starts); getActiveNotifications then throws
+        // SecurityException "Disallowed call from unknown notification listener".
+        val active = try {
+            getActiveNotifications()
+        } catch (e: SecurityException) {
+            null
+        }
+        active?.forEach { sbn ->
             if (sbn.isClearable && !sbn.isOngoing) {
                 val danmakuText = extractDanmakuText(sbn)
                 if (danmakuText.isNotBlank()) {
